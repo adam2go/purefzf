@@ -69,7 +69,12 @@ def is_space(ch):
     return cp in (0x85, 0xA0) or unicodedata.category(ch) in ("Zs", "Zl", "Zp")
 
 
+_ASCII_SPACE_STR = " \t\n\v\f\r"
+
+
 def leading_whitespaces(text):
+    if text.isascii():
+        return len(text) - len(text.lstrip(_ASCII_SPACE_STR))
     n = 0
     for ch in text:
         if not is_space(ch):
@@ -79,6 +84,8 @@ def leading_whitespaces(text):
 
 
 def trailing_whitespaces(text):
+    if text.isascii():
+        return len(text) - len(text.rstrip(_ASCII_SPACE_STR))
     n = 0
     for ch in reversed(text):
         if not is_space(ch):
@@ -88,6 +95,8 @@ def trailing_whitespaces(text):
 
 
 def trim_length(text):
+    if text.isascii():
+        return len(text.strip(_ASCII_SPACE_STR))
     trailing = trailing_whitespaces(text)
     if trailing == len(text):  # completely empty
         return 0
@@ -479,6 +488,10 @@ def _fuzzy_match_v2_ascii(case_sensitive, forward, text, lower_text, pattern,
     hay = text if case_sensitive else lower_text
     twin = hay[min_idx:max_idx]
     last = max_idx - min_idx - 1
+    tfind = twin.find
+    GS, GE, SM = SCORE_GAP_START, SCORE_GAP_EXTENSION, SCORE_MATCH
+    BB, BC, FCM = BONUS_BOUNDARY, BONUS_CONSECUTIVE, \
+        BONUS_FIRST_CHAR_MULTIPLIER
 
     # Bonus for each position, derived from the original (un-folded) chars
     cls = text[min_idx:max_idx].encode("ascii").translate(
@@ -495,15 +508,15 @@ def _fuzzy_match_v2_ascii(case_sensitive, forward, text, lower_text, pattern,
     if M == 1:
         ch = pattern
         max_score, max_pos = 0, 0
-        j = twin.find(ch)
+        j = tfind(ch)
         while j >= 0:
             bonus = bm[((cls[j - 1] if j else prev0) << 3) | cls[j]]
-            score = SCORE_MATCH + bonus * BONUS_FIRST_CHAR_MULTIPLIER
+            score = SM + bonus * FCM
             if score > max_score if forward else score >= max_score:
                 max_score, max_pos = score, j
-                if forward and bonus >= BONUS_BOUNDARY:
+                if forward and bonus >= BB:
                     break
-            j = twin.find(ch, j + 1)
+            j = tfind(ch, j + 1)
         result = (min_idx + max_pos, min_idx + max_pos + 1, max_score)
         return result, ([min_idx + max_pos] if with_pos else None)
 
@@ -512,7 +525,7 @@ def _fuzzy_match_v2_ascii(case_sensitive, forward, text, lower_text, pattern,
     F = []
     idx = 0
     for ch in pattern:
-        idx = twin.find(ch, idx)
+        idx = tfind(ch, idx)
         F.append(idx)
         idx += 1
 
@@ -530,12 +543,12 @@ def _fuzzy_match_v2_ascii(case_sensitive, forward, text, lower_text, pattern,
     in_gap = False
     j = f0
     while j <= last:
-        nxt = twin.find(pchar, j)
+        nxt = tfind(pchar, j)
         if nxt < 0 or nxt > last:
             nxt = last + 1
         run = nxt - j
         if run:
-            first = h + (SCORE_GAP_EXTENSION if in_gap else SCORE_GAP_START)
+            first = h + (GE if in_gap else GS)
             base = j - f0
             if first <= 0:
                 h = 0
@@ -548,9 +561,7 @@ def _fuzzy_match_v2_ascii(case_sensitive, forward, text, lower_text, pattern,
             in_gap = True
         if nxt > last:
             break
-        h = SCORE_MATCH + \
-            bm[((cls[nxt - 1] if nxt else prev0) << 3) | cls[nxt]] * \
-            BONUS_FIRST_CHAR_MULTIPLIER
+        h = SM + bm[((cls[nxt - 1] if nxt else prev0) << 3) | cls[nxt]] * FCM
         h_prev[nxt - f0] = h
         c_prev[nxt - f0] = 1
         in_gap = False
@@ -571,15 +582,14 @@ def _fuzzy_match_v2_ascii(case_sensitive, forward, text, lower_text, pattern,
         is_last = i == M - 1
         j = f
         while j <= last:
-            nxt = twin.find(pchar, j)
+            nxt = tfind(pchar, j)
             if nxt < 0 or nxt > last:
                 nxt = last + 1
             run = nxt - j
             if run:
                 # Non-match cells: s1 = 0, so the score decays from the left
                 # neighbor and clamps at zero
-                first = h_left + (SCORE_GAP_EXTENSION if in_gap
-                                  else SCORE_GAP_START)
+                first = h_left + (GE if in_gap else GS)
                 base = j - f0
                 if first <= 0:
                     h_left = 0
@@ -592,10 +602,9 @@ def _fuzzy_match_v2_ascii(case_sensitive, forward, text, lower_text, pattern,
                 in_gap = h_left > 0
             if nxt > last:
                 break
-            s2 = h_left + (SCORE_GAP_EXTENSION if in_gap
-                           else SCORE_GAP_START)
+            s2 = h_left + (GE if in_gap else GS)
             diag = nxt - 1 - f0
-            s1 = h_prev[diag] + SCORE_MATCH
+            s1 = h_prev[diag] + SM
             consecutive = c_prev[diag] + 1
             b0 = b = bm[((cls[nxt - 1] if nxt else prev0) << 3) | cls[nxt]]
             if consecutive > 1:
@@ -603,11 +612,11 @@ def _fuzzy_match_v2_ascii(case_sensitive, forward, text, lower_text, pattern,
                 fb = bm[((cls[start - 1] if start else prev0) << 3) |
                         cls[start]]
                 # Break consecutive chunk
-                if b >= BONUS_BOUNDARY and b > fb:
+                if b >= BB and b > fb:
                     consecutive = 1
                 else:
-                    if BONUS_CONSECUTIVE > b:
-                        b = BONUS_CONSECUTIVE
+                    if BC > b:
+                        b = BC
                     if fb > b:
                         b = fb
             if s1 + b < s2:
@@ -947,15 +956,22 @@ def prefix_match(case_sensitive, normalize, forward, text, pattern,
     if len(text) - trimmed_len < len(pattern):
         return NO_MATCH, None
 
-    for index, r in enumerate(pattern):
-        char = ord(text[trimmed_len + index])
-        if not case_sensitive:
-            char = to_lower_rune(char)
-        if normalize and 0x00C0 <= char <= 0xFF61:
-            char = ord(NORMALIZED.get(chr(char), chr(char)))
-        if char != ord(r):
-            return NO_MATCH, None
     len_pattern = len(pattern)
+    if text.isascii():
+        sub = text[trimmed_len:trimmed_len + len_pattern]
+        if not case_sensitive:
+            sub = sub.lower()
+        if sub != pattern:
+            return NO_MATCH, None
+    else:
+        for index, r in enumerate(pattern):
+            char = ord(text[trimmed_len + index])
+            if not case_sensitive:
+                char = to_lower_rune(char)
+            if normalize and 0x00C0 <= char <= 0xFF61:
+                char = ord(NORMALIZED.get(chr(char), chr(char)))
+            if char != ord(r):
+                return NO_MATCH, None
     score, _ = _calculate_score(case_sensitive, normalize, text, pattern,
                                 trimmed_len, trimmed_len + len_pattern, False,
                                 scheme)
@@ -975,14 +991,21 @@ def suffix_match(case_sensitive, normalize, forward, text, pattern,
     if diff < 0:
         return NO_MATCH, None
 
-    for index, r in enumerate(pattern):
-        char = ord(text[index + diff])
+    if text.isascii():
+        sub = text[diff:trimmed_len]
         if not case_sensitive:
-            char = to_lower_rune(char)
-        if normalize and 0x00C0 <= char <= 0xFF61:
-            char = ord(NORMALIZED.get(chr(char), chr(char)))
-        if char != ord(r):
+            sub = sub.lower()
+        if sub != pattern:
             return NO_MATCH, None
+    else:
+        for index, r in enumerate(pattern):
+            char = ord(text[index + diff])
+            if not case_sensitive:
+                char = to_lower_rune(char)
+            if normalize and 0x00C0 <= char <= 0xFF61:
+                char = ord(NORMALIZED.get(chr(char), chr(char)))
+            if char != ord(r):
+                return NO_MATCH, None
     len_pattern = len(pattern)
     sidx = trimmed_len - len_pattern
     eidx = trimmed_len
@@ -1027,7 +1050,10 @@ def equal_match(case_sensitive, normalize, forward, text, pattern,
     else:
         sub = text[trimmed_len:len(text) - trimmed_end_len]
         if not case_sensitive:
-            sub = "".join(chr(to_lower_rune(ord(c))) for c in sub)
+            if sub.isascii():
+                sub = sub.lower()
+            else:
+                sub = "".join(chr(to_lower_rune(ord(c))) for c in sub)
         match = sub == pattern
     if match:
         return (trimmed_len, trimmed_len + len_pattern,

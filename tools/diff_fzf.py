@@ -53,6 +53,7 @@ FLAG_SETS = [
     ["--scheme=history"],
     ["--print-query"],
     ["--print0"],
+    ["--read0"],
 ]
 
 # Option sets that need field-structured input
@@ -183,6 +184,11 @@ def main():
     args = ap.parse_args()
     if not args.fzf or not os.path.exists(args.fzf):
         sys.exit("fzf binary not found; pass --fzf or set FZF_BIN")
+    ver = subprocess.run([args.fzf, "--version"],
+                         stdout=subprocess.PIPE).stdout.decode().strip()
+    if not ver.startswith("0.73.1"):
+        print("WARNING: purefzf is ported from fzf 0.73.1 but the judge is "
+              "%s; differences may reflect upstream changes, not bugs" % ver)
 
     env = dict(os.environ)
     env["FZF_DEFAULT_OPTS"] = ""

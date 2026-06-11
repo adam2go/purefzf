@@ -15,8 +15,8 @@ syntax, and the non-interactive `--filter` mode.
   ported line-by-line from fzf v0.73.1 (commit `ce4bef75`) and checked
   three ways (see [Verification](#verification)):
   - fzf's own unit tests for the algorithm, pattern parser, and tokenizer,
-    ported to pytest — **179 tests, all passing**;
-  - differential testing against the real fzf binary — **4,978 of 4,981
+    ported to pytest — **193 tests, all passing**;
+  - differential testing against the real fzf binary — **5,237 of 5,240
     cases (99.94%) byte-identical output**, the remaining 3 traced to an
     fzf bug, not a porting gap ([details](#known-differences));
   - 6,000 randomized cross-checks between the optimized ASCII fast path
@@ -94,18 +94,18 @@ never shells out).
    interactive-typing optimization, not part of matching semantics).
 
    ```console
-   $ python -m pytest        # 179 passed
+   $ python -m pytest        # 193 passed
    ```
 
 2. **Differential testing against the fzf binary.** `tools/diff_fzf.py`
    compares `purefzf --filter` with `fzf --filter` byte by byte across
    8 corpora (dictionary words, file paths, source code, structured
    fields, unicode, empty/whitespace/200KB lines, invalid UTF-8) ×
-   29 option sets × up to 37 queries:
+   30 option sets × up to 37 queries:
 
    ```console
    $ FZF_BIN=$(which fzf) python tools/diff_fzf.py
-   4978/4981 byte-identical (99.94%), 3 known divergences (fzf slab reuse, see README), 0 unexplained
+   5237/5240 byte-identical (99.94%), 3 known divergences (fzf slab reuse, see README), 0 unexplained
    ```
 
 3. **Fast-path cross-checking.** The optimized ASCII path must produce
@@ -138,27 +138,78 @@ The complete list — anything not listed here that differs from
 
 ## Performance
 
-Honest numbers: the fzf binary is a multi-threaded Go program and remains
-5–25× faster end-to-end. purefzf is for environments where that binary
-cannot run, and it is fast enough to be practical — selective queries
-scan **1.3–3.2M lines/s** in-process on CPython 3.12 (Apple M-series):
+On selective queries — the typical case for an agent or a script —
+purefzf 0.2.0 is **in the same league as the fzf binary itself**: a query
+like `zsh` over the 235k-word dictionary takes 12 ms in-process vs 11 ms
+for spawning fzf, and a no-match query is faster than the spawn. The
+trick is a bulk prefilter: the corpus is joined once and scanned with a
+single backtrack-free regex (plus a memchr-speed pass over the rarest
+pattern character), so per-line Python work only happens on candidate
+lines. Match-heavy queries are bounded by the scoring DP and stay
+10–20× slower than Go.
 
-| workload                        | matches | purefzf lib | purefzf CLI | fzf binary |
-|---------------------------------|--------:|------------:|------------:|-----------:|
-| 235k words, `ion`               |  16,443 |      145 ms |      170 ms |      21 ms |
-| 235k words, `zsh`               |      62 |       75 ms |      101 ms |      12 ms |
-| 235k words, `'tion`             |   7,422 |      180 ms |      205 ms |      16 ms |
-| 235k words, `^ab cd$ \| ing$`   |       5 |      405 ms |      434 ms |      13 ms |
-| 108k paths, `test`              | 104,331 |     1.11 s  |     1.14 s  |      75 ms |
-| 108k paths, `pyini`             |  60,566 |      610 ms |      650 ms |      48 ms |
-| 108k paths, `lib/site`          | 107,135 |     1.85 s  |     1.88 s  |      82 ms |
+### Experiment: 0.1.0 → 0.2.0
 
-Median of 7 runs; every workload's output is verified byte-identical to
-the fzf binary before it is timed. Reproduce with:
+Both versions run in separate subprocesses on the same corpora
+(0.1.0 installed from PyPI, 0.2.0 from the working tree); for every
+workload the two outputs are first verified identical (md5), then each
+version is timed as the median of 7 runs, repeated in 3 independent
+rounds — the table shows the median round with min–max spread across
+rounds. The full matrix was run twice end-to-end on an idle machine;
+both runs agreed within 6%. Environment: Apple M4 Pro, macOS 26.5,
+CPython 3.12.7, fzf 0.73.1 as the end-to-end reference (its column
+includes process spawn; the purefzf columns are in-process library
+calls — that is the embedding scenario purefzf exists for).
+
+| workload                      | matches | 0.1.0 ms       | 0.2.0 ms      | speedup | fzf e2e |
+|-------------------------------|--------:|---------------:|--------------:|--------:|--------:|
+| 235k words, `zsh`             |      62 |   73 (73–73)   |  12 (12–13)   |  5.9×   |   11 ms |
+| 235k words, `ion`             |  16,443 |  144 (143–144) |  90 (89–93)   |  1.6×   |   21 ms |
+| 235k words, `q`               |   3,641 |   77 (76–77)   |  13 (13–14)   |  5.7×   |   13 ms |
+| 235k words, `'tion`           |   7,422 |  176 (175–177) |  31 (31–32)   |  5.7×   |   16 ms |
+| 235k words, `^ab`             |     666 |  160 (160–161) |  17 (17–17)   |  9.2×   |   12 ms |
+| 235k words, `ing$`            |   5,540 |  181 (181–183) |  24 (24–25)   |  7.5×   |   15 ms |
+| 235k words, `foo bar`         |      16 |  255 (255–256) |  20 (20–20)   | 12.6×   |   13 ms |
+| 235k words, `^ab cd$ \| ing$` |       5 |  399 (398–400) |  24 (24–24)   | 16.7×   |   13 ms |
+| 235k words, `aBc` (no match)  |       0 |   80 (79–80)   |   8 (8–8)     |  9.6×   |   12 ms |
+| 108k paths, `test`            | 104,348 | 1111 (1105–1138) | 1028 (1016–1034) | 1.1× | 73 ms |
+| 108k paths, `pyini`           |  60,575 |  610 (606–612) | 560 (557–563) |  1.1×   |   49 ms |
+| 108k paths, `lib/site`        | 107,156 | 1822 (1814–1836) | 1726 (1722–1740) | 1.1× | 82 ms |
+| 6k unicode, `danco`           |   3,000 |   17 (17–17)   |  18 (18–18)   |  0.96×  |    6 ms |
+| 100k fields, `user1 group3` + `--nth=1,2` | 5,029 | 509 (507–510) | 503 (503–505) | 1.0× | 18 ms |
+
+Raw data for both end-to-end runs:
+[`bench/0.2.0-vs-0.1.0.json`](bench/0.2.0-vs-0.1.0.json),
+[`bench/0.2.0-vs-0.1.0-run2.json`](bench/0.2.0-vs-0.1.0-run2.json).
+Reproduce with:
 
 ```console
-$ FZF_BIN=$(which fzf) python tools/bench.py
+$ python -m venv /tmp/v && /tmp/v/bin/pip install purefzf==0.1.0
+$ FZF_BIN=$(which fzf) python tools/bench_ab.py --a /tmp/v/bin/python --a-name 0.1.0
+$ FZF_BIN=$(which fzf) python tools/bench.py   # lib vs CLI vs fzf end-to-end
 ```
+
+What the numbers say:
+
+- **Selective and multi-term queries got 5.7–16.7× faster.** The bulk
+  prefilter rejects non-candidate lines at C speed, so cost now scales
+  with the result size more than the corpus size. Fuzzy terms compile to
+  an anchored greedy chain (`^[^\na]*a[^\nb]*b…`) whose every step has
+  exactly one outcome — linear worst case by construction (a 200KB
+  degenerate line is a regression test).
+- **Match-heavy queries improved only 6–9%.** When 96% of 108k lines
+  match, the time goes to the Smith-Waterman scoring of every line; that
+  is the algorithm, not overhead. This is the workload where the Go
+  binary keeps its 10–20× lead, and on CPython we consider it the floor —
+  further gains would need C extensions or NumPy, which would break the
+  pure-Python contract. (PyPy is supported and CI-tested if you need
+  more.)
+- **Small corpora are unchanged by design** (the prefilter only engages
+  at ≥4,096 lines; below that the per-line path is already sub-ms), and
+  `--nth` queries bypass the prefilter because field reordering
+  invalidates per-line necessary conditions.
+- The CLI adds ~25 ms of interpreter startup over the library numbers;
+  `fzf e2e` includes its own ~5 ms process spawn.
 
 ## How the port stays faithful
 

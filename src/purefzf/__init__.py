@@ -18,7 +18,7 @@ Quick start::
     purefzf.fuzzy_match_v2(False, False, True, "Quarry", "qry", True)
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 from .algo import (  # noqa: F401
     Slab,

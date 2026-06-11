@@ -18,7 +18,7 @@ Quick start::
     purefzf.fuzzy_match_v2(False, False, True, "Quarry", "qry", True)
 """
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 from .algo import (  # noqa: F401
     Slab,
@@ -33,6 +33,7 @@ from .algo import (  # noqa: F401
 )
 from .core import Match, run_filter  # noqa: F401
 from .core import filter_lines as filter  # noqa: F401
+from .index import Index  # noqa: F401
 from .pattern import build_pattern  # noqa: F401
 from .tokenizer import Delimiter  # noqa: F401
 

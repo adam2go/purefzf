@@ -91,6 +91,101 @@ def _prepare(query, fuzzy, extended, case, normalize, algo, scheme, nth,
     return pattern, criteria
 
 
+class _Corpus:
+    """A corpus snapshot with lazily cached derived data (joined text,
+    lowered text, sample windows, non-ASCII line index), so repeated
+    queries do not redo per-call preparation."""
+
+    __slots__ = ("lines", "_joined", "_lower", "_nl_ok", "_is_ascii",
+                 "_non_ascii_idx", "_samples")
+
+    def __init__(self, lines):
+        if not isinstance(lines, list):
+            lines = list(lines)
+        self.lines = lines
+        self._joined = None
+        self._lower = None
+        self._nl_ok = None
+        self._is_ascii = None
+        self._non_ascii_idx = None
+        self._samples = None
+
+    @property
+    def joined(self):
+        if self._joined is None:
+            self._joined = "\n".join(self.lines)
+        return self._joined
+
+    @property
+    def lower(self):
+        if self._lower is None:
+            self._lower = self.joined.lower()
+        return self._lower
+
+    @property
+    def nl_ok(self):
+        """False when items contain embedded newlines (e.g. --read0
+        records), which would break line-boundary bookkeeping."""
+        if self._nl_ok is None:
+            self._nl_ok = (not self.lines) or \
+                self.joined.count("\n") == len(self.lines) - 1
+        return self._nl_ok
+
+    @property
+    def is_ascii(self):
+        if self._is_ascii is None:
+            self._is_ascii = self.joined.isascii()
+        return self._is_ascii
+
+    def samples(self, lowered):
+        """Evenly spread sample windows used to estimate prefilter
+        selectivity. Several small windows avoid the bias of a sorted
+        corpus (e.g. a dictionary whose tail is all z-words)."""
+        if self._samples is None:
+            n_lines = len(self.lines)
+            windows = 7
+            chunk = 220
+            texts = []
+            seen = 0
+            for i in range(windows):
+                lo = i * n_lines // windows
+                part = self.lines[lo:lo + chunk]
+                seen += len(part)
+                texts.append("\n".join(part))
+            self._samples = [seen, texts, None]
+        if lowered and self._samples[2] is None:
+            self._samples[2] = [t.lower() for t in self._samples[1]]
+        return self._samples[0], \
+            (self._samples[2] if lowered else self._samples[1])
+
+    def non_ascii_indices(self):
+        """Indices of lines containing non-ASCII characters; these always
+        stay prefilter candidates (they can match through normalization
+        or rune-wise lowering that the regex does not model)."""
+        if self._non_ascii_idx is None:
+            idxs = []
+            joined = self.joined
+            cur = 0
+            scan = 0
+            n = len(joined)
+            na = re.compile("[^\x00-\x7f]")
+            m = na.search(joined, 0)
+            while m is not None:
+                ls = joined.rfind("\n", 0, m.start()) + 1
+                cur += joined.count("\n", scan, ls)
+                le = joined.find("\n", m.end())
+                if le < 0:
+                    le = n
+                idxs.append(cur)
+                scan = le + 1
+                cur += 1
+                if scan > n:
+                    break
+                m = na.search(joined, scan)
+            self._non_ascii_idx = idxs
+        return self._non_ascii_idx
+
+
 def _term_necessary_regex(term):
     """A regex over a single line that is a *necessary* condition for the
     term to match it (never a sufficient one -- candidates are always
@@ -116,15 +211,17 @@ def _term_necessary_regex(term):
 _MIN_PREFILTER_LINES = 4096
 
 
-def _bulk_candidates(lines, pattern):
+def _bulk_candidates(corpus, pattern, min_lines=None):
     """C-speed prefilter: scan the corpus joined into one string with a
     single regex built from one of the pattern's AND-sets, yielding only
     the lines that could possibly match. Returns a list of (index, line)
     pairs, or None when prefiltering is not applicable/profitable."""
+    lines = corpus.lines
     if pattern.nth:
         # --nth can reorder fields; a per-line condition no longer holds
         return None
-    if len(lines) < _MIN_PREFILTER_LINES:
+    if len(lines) < (_MIN_PREFILTER_LINES if min_lines is None
+                     else min_lines):
         # The per-line path is already fast on small inputs
         return None
 
@@ -175,60 +272,30 @@ def _bulk_candidates(lines, pattern):
     # cheaper than the per-line prefilter when it rejects the vast
     # majority of lines; plain literal scans are near-free and pay off at
     # much lower rejection rates.
-    if True:
-        n_lines = len(lines)
-        chunk = 512
-        hits = seen = 0
-        for start_line in (0, n_lines // 2, n_lines - chunk):
-            lo = max(0, start_line)
-            sample = lines[lo:lo + chunk]
-            seen += len(sample)
-            stext = "\n".join(sample)
-            shay = stext.lower() if lower_hay else stext
-            pos = 0
-            send = len(stext)
-            while pos < send:
-                m = rx.search(shay, pos)
-                if m is None:
-                    break
-                le = stext.find("\n", m.end())
-                if le < 0:
-                    le = send
-                hits += 1
-                pos = le + 1
-        threshold = 0.2 if has_fuzzy else 0.6
-        if hits > seen * threshold:
-            return None
-
-    joined = "\n".join(lines)
-    if lines and joined.count("\n") != len(lines) - 1:
-        # Embedded newlines (e.g. --read0 records); line-boundary
-        # bookkeeping would be wrong
-        return None
-    hay = joined.lower() if lower_hay else joined
-
-    # Lines with non-ASCII content can match through normalization or
-    # rune-wise lowering that the regex does not model; always keep them
-    # as candidates (mirrors fzf's bytes-vs-runes split).
-    non_ascii_idx = []
-    if not joined.isascii():
-        cur = 0
-        scan = 0
-        n = len(joined)
-        na = re.compile("[^\x00-\x7f]")
-        m = na.search(joined, 0)
-        while m is not None:
-            ls = joined.rfind("\n", 0, m.start()) + 1
-            cur += joined.count("\n", scan, ls)
-            le = joined.find("\n", m.end())
-            if le < 0:
-                le = n
-            non_ascii_idx.append(cur)
-            scan = le + 1
-            cur += 1
-            if scan > n:
+    seen, stexts = corpus.samples(lower_hay)
+    hits = 0
+    for stext in stexts:
+        pos = 0
+        send = len(stext)
+        while pos < send:
+            m = rx.search(stext, pos)
+            if m is None:
                 break
-            m = na.search(joined, scan)
+            le = stext.find("\n", m.end())
+            if le < 0:
+                le = send
+            hits += 1
+            pos = le + 1
+    threshold = 0.2 if has_fuzzy else 0.6
+    if hits > seen * threshold:
+        return None
+
+    if not corpus.nl_ok:
+        return None
+    joined = corpus.joined
+    hay = corpus.lower if lower_hay else joined
+
+    non_ascii_idx = [] if corpus.is_ascii else corpus.non_ascii_indices()
 
     out = []
     cur = 0
@@ -302,9 +369,17 @@ def _run(lines, query, fuzzy=True, extended=True, case="smart",
     pattern, criteria = _prepare(query, fuzzy, extended, case, normalize,
                                  algo, scheme, nth, delimiter, tiebreak,
                                  with_positions)
+    corpus = lines if isinstance(lines, _Corpus) else _Corpus(lines)
+    return _run_prepared(corpus, pattern, criteria, sort, tac)
+
+
+def _run_prepared(corpus, pattern, criteria, sort, tac, candidate_pairs=None):
+    """Match a prepared pattern against a corpus. candidate_pairs, when
+    given, replaces the candidate enumeration with an already-narrowed
+    (index, line) iterable; every candidate is still verified by the real
+    match functions."""
     slab = _algo.Slab()
-    if not isinstance(lines, (list, tuple)):
-        lines = list(lines)
+    lines = corpus.lines
 
     # fzf streams (and therefore never sorts) only when sorting is disabled
     # and --tac is not given; otherwise the sortedness of the output is
@@ -322,9 +397,12 @@ def _run(lines, query, fuzzy=True, extended=True, case="smart",
         forward = pattern.forward
         with_pos = pattern.with_pos
 
-        pairs = _bulk_candidates(lines, pattern)
-        if pairs is None:
-            pairs = enumerate(lines)
+        if candidate_pairs is not None:
+            pairs = candidate_pairs
+        else:
+            pairs = _bulk_candidates(corpus, pattern)
+            if pairs is None:
+                pairs = enumerate(lines)
 
         # The default criteria pair (score, length) needs neither offsets
         # nor the generic criteria loop; rank tuples are built inline.

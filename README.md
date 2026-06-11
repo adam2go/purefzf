@@ -60,6 +60,15 @@ purefzf.filter("conf", lines, nth="2..", delimiter=":", tiebreak="begin")
 for m in purefzf.matches("qry", lines, with_positions=True):
     print(m.score, m.text, m.positions)
 
+# Repeated queries against one corpus: build an Index once.
+# Corpus preparation is amortized, and incremental queries are narrowed
+# to the verified match set of the previous, broader query
+# ('z' -> 'zs' -> 'zsh' runs in fractions of a millisecond per step).
+idx = purefzf.Index(lines)
+idx.filter("zs")
+idx.filter("zsh")            # same options as purefzf.filter
+idx.matches("zsh c", with_positions=True)
+
 # low-level: score a single candidate
 # (case_sensitive, normalize, forward, text, pattern, with_pos)
 result, positions = purefzf.fuzzy_match_v2(
@@ -210,6 +219,39 @@ What the numbers say:
   invalidates per-line necessary conditions.
 - The CLI adds ~25 ms of interpreter startup over the library numbers;
   `fzf e2e` includes its own ~5 ms process spawn.
+
+### Experiment: repeated queries with `Index` (0.3.0)
+
+`purefzf.Index` pre-joins the corpus once and caches verified match sets
+for query shapes where narrowing is provable (single-term AND groups of
+fuzzy / `'exact` / `^prefix` terms; suffix/equal/boundary anchors,
+inverse terms, OR groups, and `--nth` always bypass the cache). The
+cache only ever shrinks the candidate set — every result is recomputed
+by the real match functions, which is why the outputs below could be
+md5-verified identical across all implementations and fzf itself.
+
+Same methodology as above (subprocess isolation, verify-then-time,
+median of 7 session passes × 3 rounds), 235k-word corpus:
+
+| session                          | 0.2.0 one-shot | 0.3.0 one-shot | 0.3.0 Index | fzf spawn/query |
+|----------------------------------|---------------:|---------------:|------------:|----------------:|
+| typing `zsh cache` (9 steps)     |  209 ms        |  151 ms        |  **26 ms**  |  111 ms         |
+| 8 unrelated queries              |  149 ms        |  148 ms        |  117 ms     |   98 ms         |
+| refine + backtrack (7 steps)     | 1038 ms        |  300 ms        | **170 ms**  |  105 ms         |
+
+Per query, the typing session drops from 23.2 ms to **2.9 ms** — once
+narrowed, each keystroke costs 0.01–2.8 ms, which is faster than
+spawning the fzf binary for every keystroke (12.3 ms/query) by 4×.
+The one-shot improvement between 0.2.0 and 0.3.0 comes from a sampling
+fix the session work surfaced: the prefilter's selectivity estimate now
+uses seven evenly spread windows instead of three (a sorted dictionary's
+tail is all z-words, which biased the old estimate and disabled the
+prefilter for queries like `z`: 78 ms → 20 ms).
+Raw data: [`bench/0.3.0-sessions.json`](bench/0.3.0-sessions.json).
+
+```console
+$ FZF_BIN=$(which fzf) python tools/bench_session.py
+```
 
 ## How the port stays faithful
 

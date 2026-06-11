@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "purefzf"
-version = "0.2.0"
+version = "0.3.0"
 description = "A pure Python implementation of fzf's fuzzy matching (FuzzyMatchV2) and non-interactive filter mode"
 readme = "README.md"
 requires-python = ">=3.9"

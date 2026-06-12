@@ -15,7 +15,7 @@ syntax, and the non-interactive `--filter` mode.
   ported line-by-line from fzf v0.73.1 (commit `ce4bef75`) and checked
   three ways (see [Verification](#verification)):
   - fzf's own unit tests for the algorithm, pattern parser, and tokenizer,
-    ported to pytest — **193 tests, all passing**;
+    ported to pytest — **220 tests, all passing**;
   - differential testing against the real fzf binary — **5,237 of 5,240
     cases (99.94%) byte-identical output**, the remaining 3 traced to an
     fzf bug, not a porting gap ([details](#known-differences));
@@ -103,7 +103,7 @@ never shells out).
    interactive-typing optimization, not part of matching semantics).
 
    ```console
-   $ python -m pytest        # 193 passed
+   $ python -m pytest        # 220 passed
    ```
 
 2. **Differential testing against the fzf binary.** `tools/diff_fzf.py`
@@ -164,8 +164,8 @@ Both versions run in separate subprocesses on the same corpora
 workload the two outputs are first verified identical (md5), then each
 version is timed as the median of 7 runs, repeated in 3 independent
 rounds — the table shows the median round with min–max spread across
-rounds. The full matrix was run twice end-to-end on an idle machine;
-both runs agreed within 6%. Environment: Apple M4 Pro, macOS 26.5,
+rounds. The full matrix was run three times end-to-end (the third with the
+0.3.0 tree); per-workload speedups agree within 3% across runs. Environment: Apple M4 Pro, macOS 26.5,
 CPython 3.12.7, fzf 0.73.1 as the end-to-end reference (its column
 includes process spawn; the purefzf columns are in-process library
 calls — that is the embedding scenario purefzf exists for).

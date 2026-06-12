@@ -247,7 +247,9 @@ fix the session work surfaced: the prefilter's selectivity estimate now
 uses seven evenly spread windows instead of three (a sorted dictionary's
 tail is all z-words, which biased the old estimate and disabled the
 prefilter for queries like `z`: 78 ms → 20 ms).
-Raw data: [`bench/0.3.0-sessions.json`](bench/0.3.0-sessions.json).
+Raw data for both runs:
+[`bench/0.3.0-sessions.json`](bench/0.3.0-sessions.json),
+[`bench/0.3.0-sessions-run2.json`](bench/0.3.0-sessions-run2.json).
 
 ```console
 $ FZF_BIN=$(which fzf) python tools/bench_session.py

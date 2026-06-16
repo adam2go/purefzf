@@ -312,6 +312,10 @@ normalization decisions, the exact V2→V1 fallback thresholds
 (`N×M > 102400` or `M > 1000`), tiebreak rank encoding, and Go's
 per-byte U+FFFD substitution for invalid UTF-8.
 
+## Changelog
+
+Version history is in [CHANGELOG.md](CHANGELOG.md).
+
 ## License
 
 MIT. The algorithm and its test suite are ported from

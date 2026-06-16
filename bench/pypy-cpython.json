@@ -1,0 +1,50 @@
+{
+ "label": "CPython",
+ "implementation": "cpython",
+ "version": "3.12.7",
+ "corpus_lines": 235976,
+ "records": [
+  {
+   "query": "zsh",
+   "matches": 62,
+   "cold_ms": 13.835165998898447,
+   "warm_ms": 13.554000062867999
+  },
+  {
+   "query": "q",
+   "matches": 3641,
+   "cold_ms": 15.622625011019409,
+   "warm_ms": 14.032208011485636
+  },
+  {
+   "query": "'tion",
+   "matches": 7422,
+   "cold_ms": 31.596291926689446,
+   "warm_ms": 31.754374969750643
+  },
+  {
+   "query": "^ab cd$ | ing$",
+   "matches": 5,
+   "cold_ms": 24.26554204430431,
+   "warm_ms": 24.166082963347435
+  },
+  {
+   "query": "ion",
+   "matches": 16443,
+   "cold_ms": 92.03499997965991,
+   "warm_ms": 91.5223330957815
+  },
+  {
+   "query": "tion",
+   "matches": 9048,
+   "cold_ms": 73.40058300178498,
+   "warm_ms": 73.83125007618219
+  },
+  {
+   "query": "e",
+   "matches": 158127,
+   "cold_ms": 256.4599169418216,
+   "warm_ms": 262.2891250066459
+  }
+ ]
+}

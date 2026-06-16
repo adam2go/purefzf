@@ -208,11 +208,11 @@ What the numbers say:
   degenerate line is a regression test).
 - **Match-heavy queries improved only 6–9%.** When 96% of 108k lines
   match, the time goes to the Smith-Waterman scoring of every line; that
-  is the algorithm, not overhead. This is the workload where the Go
-  binary keeps its 10–20× lead, and on CPython we consider it the floor —
-  further gains would need C extensions or NumPy, which would break the
-  pure-Python contract. (PyPy is supported and CI-tested if you need
-  more.)
+  is the algorithm, not overhead. Every match needs exactly one
+  optimal-alignment DP to get its score, so on CPython this is the floor
+  (profiling puts 76% of the time inside the scoring loop's arithmetic).
+  This is the workload where the Go binary keeps its 10–20× lead — and
+  where **PyPy is the real lever** (see below).
 - **Small corpora are unchanged by design** (the prefilter only engages
   at ≥4,096 lines; below that the per-line path is already sub-ms), and
   `--nth` queries bypass the prefilter because field reordering
@@ -254,6 +254,51 @@ Raw data for both runs:
 ```console
 $ FZF_BIN=$(which fzf) python tools/bench_session.py
 ```
+
+### Need more throughput? Run on PyPy
+
+The match-heavy floor is a *CPython* floor: the scoring DP is exactly the
+kind of tight arithmetic loop PyPy's JIT compiles to near-native speed.
+Same 235k-word corpus, identical match counts, warm steady state (median
+of 9 runs after warmup; CPython 3.12.7 vs PyPy 7.3.20 / 3.11):
+
+| query (matches)        | CPython warm | PyPy warm | speedup |
+|------------------------|-------------:|----------:|--------:|
+| `zsh` (62)             |    13.6 ms   |   7.4 ms  |  1.8×   |
+| `q` (3,641)            |    14.3 ms   |   6.8 ms  |  2.1×   |
+| `'tion` (7,422)        |    31.9 ms   |  11.3 ms  |  2.8×   |
+| `^ab cd$ \| ing$` (5)  |    24.3 ms   |   7.0 ms  |  3.4×   |
+| `ion` (16,443)         |    91.7 ms   |  44.8 ms  |  2.0×   |
+| `tion` (9,048)         |    73.8 ms   |  32.7 ms  |  2.3×   |
+| `e` (158,127, heaviest)|   262 ms     | 130 ms    |  2.0×   |
+
+So the workload that benefits *least* from the prefilter benefits *most*
+from the JIT — PyPy roughly halves the heaviest match-bound query and
+gives up to 3.4× on multi-term ones. **Caveat, measured honestly:** PyPy
+pays JIT compilation on the first call (cold `ion`: 102 ms on PyPy vs
+92 ms on CPython), so it helps a long-running embedding (a server or
+agent reusing the interpreter — the `Index` scenario) but *not* a single
+one-shot CLI invocation. purefzf is CI-tested on PyPy on every commit.
+Raw data: [`bench/pypy-cpython.json`](bench/pypy-cpython.json),
+[`bench/pypy-pypy.json`](bench/pypy-pypy.json).
+
+```console
+$ python3   tools/bench_pypy.py --label CPython
+$ pypy3     tools/bench_pypy.py --label PyPy
+```
+
+### What is *not* worth optimizing (measured, then dropped)
+
+For the record, two CPython micro-optimizations were prototyped, measured
+rigorously, and reverted because the gain did not justify the complexity
+on byte-verified code: skipping the terminal DP row's write-only buffers
+(<1% — the gap-fill slice stores are already rare and C-speed) and
+specializing short patterns. The DP arithmetic itself is the cost, and
+the honest answer there is PyPy, not uglier CPython code. multiprocessing
+would parallelize match-heavy scans across cores but is deliberately not
+bundled: process-spawn and corpus-serialization overhead only pay off on
+very large corpora, and the platform-specific complexity is not worth it
+for the common case.
 
 ## How the port stays faithful
 
